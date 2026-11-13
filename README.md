@@ -11,6 +11,9 @@ Tampermonkey userscript for E-Hentai / ExHentai that automates selecting and dow
 
 ## Installation
 
+- **One-click install / update**: [Install e-hentai-auto-torrent.user.js](https://github.com/zxjte9411/e-hentai-auto-torrent/raw/main/e-hentai-auto-torrent.user.js)
+
+
 1. Install [Tampermonkey](https://www.tampermonkey.net/).
 2. Open `e-hentai-auto-torrent.user.js` and install/paste it into Tampermonkey.
 3. Grant cross-origin access to `ehtracker.org` when prompted.
