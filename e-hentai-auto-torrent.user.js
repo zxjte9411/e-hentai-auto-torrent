@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         E-Hentai Auto Torrent Downloader
 // @namespace    https://e-hentai.org/
-// @version      1.3.0
+// @version      1.3.2
 // @description  自動抓取 E-Hentai / ExHentai 作品最新種子檔 (.torrent)，支援編號勾選、Shift 區間、範圍輸入 (1, 2, 4-12)、單檔與打包 ZIP 下載
 // @author       Antigravity
 // @match        https://e-hentai.org/*
@@ -66,6 +66,23 @@
         return name.replace(/[\\/:*?"<>|]/g, '_').trim();
     }
 
+    // 嘗試將 XHR/GM_xmlhttpRequest 以 Latin-1 讀取的 UTF-8 標頭位元組還原為正確 UTF-8 字串
+    function tryDecodeLatin1AsUtf8(str) {
+        if (!/[\u0080-\u00ff]/.test(str)) return str;
+        for (let i = 0; i < str.length; i++) {
+            if (str.charCodeAt(i) > 0xff) return str;
+        }
+        try {
+            const bytes = new Uint8Array(str.length);
+            for (let i = 0; i < str.length; i++) {
+                bytes[i] = str.charCodeAt(i);
+            }
+            return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        } catch (_) {
+            return str;
+        }
+    }
+
     // 從 Content-Disposition 解析檔名
     function parseFilenameFromHeaders(headersStr) {
         if (!headersStr) return null;
@@ -78,7 +95,7 @@
         const normalMatch = headersStr.match(/filename\s*=\s*"([^"]+)"/i) ||
                             headersStr.match(/filename\s*=\s*([^;\r\n]+)/i);
         if (normalMatch) {
-            return sanitizeFilename(normalMatch[1].trim());
+            return sanitizeFilename(tryDecodeLatin1AsUtf8(normalMatch[1].trim()));
         }
         return null;
     }
@@ -117,8 +134,10 @@
                 fallbackName += '.torrent';
             }
 
+            const gtid = form.querySelector('input[name="gtid"]')?.value || null;
             candidates.push({
                 url: linkEl.href,
+                gtid,
                 postedTime: isNaN(postedTime) ? 0 : postedTime,
                 fallbackName: sanitizeFilename(fallbackName),
             });
@@ -129,7 +148,32 @@
         }
 
         candidates.sort((a, b) => b.postedTime - a.postedTime);
-        return candidates[0];
+        const best = candidates[0];
+
+        // 透過 POST Information 取得 Personalized Torrent 專屬連結（含個人化追蹤資訊與 {EHT PERSONALIZED TORRENT...} 檔名）
+        if (best.gtid) {
+            const infoRes = await fetch(galleryTorrentsUrl, {
+                method: 'POST',
+                credentials: 'include',
+                signal,
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `gtid=${encodeURIComponent(best.gtid)}&torrent_info=Information`,
+            });
+            if (infoRes.status === 429 || infoRes.status === 503) {
+                throw new RateLimitError(infoRes.status);
+            }
+            if (infoRes.ok) {
+                const infoHtml = await infoRes.text();
+                const infoDoc = new DOMParser().parseFromString(infoHtml, 'text/html');
+                const infoLinks = Array.from(infoDoc.querySelectorAll('a[href*="ehtracker.org/get/"]'));
+                const personalizedLink = infoLinks.find((a) => /Personalized\s+Torrent/i.test(a.textContent || ''));
+                if (personalizedLink) {
+                    best.url = personalizedLink.href;
+                }
+            }
+        }
+
+        return best;
     }
 
     // 透過 GM_xmlhttpRequest 跨域取得 ehtracker.org 的 .torrent ArrayBuffer 與檔名
